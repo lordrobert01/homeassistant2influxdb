@@ -9,7 +9,7 @@ import yaml
 from MySQLdb import connect as mysql_connect, cursors
 
 # SQLite (not tested)
-#import sqlite3
+import sqlite3
 
 # progress bar
 from tqdm import tqdm
@@ -24,6 +24,7 @@ from homeassistant.helpers import location
 from homeassistant.core import Event, State
 from homeassistant.components.influxdb import get_influx_connection, _generate_event_to_json, INFLUX_SCHEMA
 from homeassistant.exceptions import InvalidEntityFormatError
+from homeassistant.util.dt import parse_datetime
 
 def rename_entity_id(old_name):
     """
@@ -63,6 +64,9 @@ def main():
     """
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--sqlite',
+                        dest='use_sqlite', action='store', type=bool, default=False, required=False,
+                        help='Define to use SQLite, instead of MySQL, -u -p -s -d parameters are required, but ignore. Can be fake like /a/')
     parser.add_argument('--user', '-u',
                         dest='user', action='store', required=True,
                         help='MySQL/MariaDB username')
@@ -94,12 +98,14 @@ def main():
     influx = get_influx_connection(influx_config, test_write=True, test_read=True)
     converter = _generate_event_to_json(influx_config)
 
-    # connect to MySQL/MariaDB database
-    connection = mysql_connect(host=args.host, user=args.user, password=args.password, database=args.database, cursorclass=cursors.SSCursor, charset="utf8")
-    cursor = connection.cursor()
-
-    # untested: connect to SQLite file instead (you need to get rid of the first three `add_argument` calls above)
-    #connection = sqlite3.connect('home_assistant_v2.db')
+    if (args.use_sqlite):
+        print('use SQLite')
+        connection = sqlite3.connect('home-assistant_v2.db')
+        cursor = connection.cursor()
+    else:
+        print('use MySQL')
+        connection = mysql_connect(host=args.host, user=args.user, password=args.password, database=args.database, cursorclass=cursors.SSCursor, charset="utf8")
+        cursor = connection.cursor()
 
     if args.row_count == 0:
         # query number of rows in states table - this will be more than the number of rows we
@@ -110,7 +116,7 @@ def main():
         total = args.row_count
 
     # select the values we are interested in
-    cursor.execute("select states.entity_id, states.state, states.attributes, events.event_type, events.time_fired from states, events where events.event_id = states.event_id")
+    cursor.execute("select states.entity_id, states.state, state_attributes.shared_attrs, events.event_type, events.time_fired from states, events, state_attributes where events.context_id = states.context_id and states.attributes_id = state_attributes.attributes_id")
 
     # map to count names and number of measurements for each entity
     statistics = {}
@@ -130,6 +136,11 @@ def main():
                 _attributes = rename_friendly_name(json.loads(_attributes_raw))
                 _event_type = row[3]
                 _time_fired = row[4]
+                if( type(row[4]) == str):
+                     _time_fired=parse_datetime(row[4])
+                else:
+                     _time_fired=row[4]
+
             except Exception as e:
                 print("Failed extracting data from %s: %s.\nAttributes: %s" % (row, e, _attributes_raw))
                 continue
